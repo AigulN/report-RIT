@@ -1,20 +1,32 @@
-# report-for-RIT.py
-import click
 import numpy as np
 import pandas as pd
-#from datetime import date
 import holidays
 import matplotlib.pyplot as plt
+import warnings
 
 
 income = 24000
-xlsx_TimeTask = pd.read_excel("App_A.xlsx", sheet_name="App_A")
-xlsx_Score = pd.read_excel("App_B.xlsx", sheet_name="App_B")
-xlsx_Rate = pd.read_excel("App_C.xlsx", sheet_name="App_C")
+fileA = 'App_A.xlsx'
+sheetA = 'App_A'
+fileB = 'App_B.xlsx'
+sheetB = 'App_B'
+fileC = 'App_C.xlsx'
+sheetC = 'App_C'
+warnings.filterwarnings("ignore", category=np.VisibleDeprecationWarning)
 
 
-@click.command()
-def main():
+def read_file(fileNameA, sheetNameA, fileNameB, sheetNameB, fileNameC, sheetNameC):
+    TimeTask = pd.read_excel(fileNameA, sheet_name=sheetNameA)
+    Score = pd.read_excel(fileNameB, sheet_name=sheetNameB)
+    Rate = pd.read_excel(fileNameC, sheet_name=sheetNameC)
+    return TimeTask, Score, Rate
+
+
+def calculate_marks(xlsx_TimeTask, xlsx_Score, xlsx_Rate):
+    df_project = pd.DataFrame()
+    df_performers = pd.DataFrame(
+        {"Исполнитель": [], "Ср.время на задачу": [], "Часов в день": [], "Список пропущ-х дней": [],
+         "Ср.вылет из оценки": []})
     tasks = xlsx_TimeTask["Задача"].unique()
     performers = xlsx_TimeTask["Исполнитель"].unique()
     performers.sort()
@@ -25,88 +37,95 @@ def main():
     end_day = days[days.size - 1]
     xlsx_TimeTask["Год"] = pd.DatetimeIndex(xlsx_TimeTask['Дата']).year
     years = xlsx_TimeTask['Год'].unique()
-    list_days = pd.date_range(start_day, end_day)
     ru_holidays = holidays.country_holidays("RU", years=years)
+    list_days = pd.date_range(start_day, end_day)
     list_workdays = pd.to_datetime([x for x in list_days if x not in ru_holidays])
-    expenses_perfs = []
-    mean_hours_perfs = []
-    absence_days = []
-    outliers = []
 
-    print("Общие трудозатраты на проект: " + str(xlsx_TimeTask["Часы"].sum()) + " часов")
+    expenses_perfs = []
     hours_on_task = []
+
     for x in tasks:
         hours_on_task.append(xlsx_TimeTask["Часы"][xlsx_TimeTask["Задача"] == x].sum())
-    print("Среднее время, затраченное на решение задач: " + str(round(np.mean(hours_on_task), 1)) + " часов")
-    print("Медианное время, затраченное на решение задач: " + str(round(np.median(hours_on_task), 1)) + " часов")
-    #hours_on_performers = []
+    df_project["Время, затраченное на решение каждой задачи"] = hours_on_task
 
-    df_outliers = pd.DataFrame({"Исполнитель": performers})
     for x in performers:
-        sum_outliers = 0
         df_x = xlsx_TimeTask[["Дата", "Часы", "Задача"]][xlsx_TimeTask["Исполнитель"] == x]
         expenses_perfs.append(df_x["Часы"].sum() * int(xlsx_Rate["Ставка"][xlsx_Rate["Исполнитель"] == x]))
-        #dop_mas = xlsx_TimeTask["Часы"][xlsx_TimeTask["Исполнитель"] == x]
-        #expenses_perfs.append(dop_mas.sum() * int(xlsx_Rate["Ставка"][xlsx_Rate["Исполнитель"] == x]))
         dates_x = pd.to_datetime(df_x["Дата"].unique())
         tasks_x = df_x["Задача"].unique()
         hours_x_on_task = []
         for y in dates_x:
             hours_x_on_task.append(df_x["Часы"][df_x["Дата"] == y].sum())
-        mean_hours_perfs.append(np.mean(hours_x_on_task))
         absence_days_x = [str(d.date()) for d in list_workdays if d not in df_x["Дата"].unique()]
-        absence_days.append(absence_days_x)
-        #hours_on_performers.append(dop_mas.sum())
-        #print("Среднее время, затраченное на решение задач исполнителем " + x + ": "+ str(round(dop_mas.mean(), 1)) + " часов")
-        sumhours_task_x = []
+        sum_hours_task_x = []
         for y in tasks_x:
-            sumhours_task_x.append(df_x["Часы"][df_x["Задача"] == y].sum())
-        df_task_x = pd.DataFrame({"Задача": tasks_x, "Время": sumhours_task_x})
-        print("Среднее время, затраченное на решение задач исполнителем " + x + ": " + str(round(df_task_x["Время"].mean(), 1)) + " часов")
+            sum_hours_task_x.append(df_x["Часы"][df_x["Задача"] == y].sum())
+        df_task_x = pd.DataFrame({"Задача": tasks_x, "Время": sum_hours_task_x})
         df_merge_x = pd.merge(df_task_x, xlsx_Score)
-        df_merge_x["Время-Оценка"] = df_merge_x["Время"] - df_merge_x["Оценка"]
-        df_merge_x["Вылет"] = df_merge_x["Время-Оценка"] / df_merge_x["Оценка"]
-        #outliers.append(int(df_merge_x["Вылет"][df_merge_x["Вылет"] > 0].mean()*100))
-        outliers.append(int(df_merge_x["Вылет"][df_merge_x["Вылет"] > 0].sum()/df_merge_x['Вылет'][df_merge_x["Вылет"] >= 0].shape[0] * 100))
+        df_merge_x["Вылет"] = (df_merge_x["Время"] - df_merge_x["Оценка"]) / df_merge_x["Оценка"]
+        outlier = int(df_merge_x["Вылет"][df_merge_x["Вылет"] > 0].sum() / len(df_merge_x.index) * 100)
+        df_performers.loc[len(df_performers.index)] = [x, round(df_task_x["Время"].mean(), 1), np.mean(hours_x_on_task),
+                                                       absence_days_x, outlier]
+    df_project["Рентабельность"] = (income - np.sum(expenses_perfs)) * 100 / income
+    return df_project, df_performers
 
-    df_outliers["Вылет"] = outliers
 
-    Profit = (income - np.sum(expenses_perfs)) * 100 / income
-    print("Рентабельность проекта: " + str(round(Profit, 1)))
+def getbar(BarData1, BarData2, labelbar1, labelbar2, labelx, labely, bartitle, filename):
+    fig, ax = plt.subplots()
+    fig.set_figheight(8)
+    fig.set_figwidth(25)
+    index = np.arange(len(BarData1))
+    bar_width = 0.4
+    opacity = 0.5
+    st_score = plt.bar(index, BarData1, bar_width, alpha=opacity, color='y', label=labelbar1)
+    st_fact = plt.bar(index + bar_width, BarData2, bar_width, alpha=opacity, color='b', label=labelbar2)
+    plt.xlabel(labelx)
+    plt.ylabel(labely)
+    plt.title(bartitle)
+    plt.legend()
+    plt.xticks(index + bar_width / 2, index + 1)
+    fig.savefig(filename)
 
-    df_hours_on_performers = pd.DataFrame({'Исполнитель': performers, 'Время': mean_hours_perfs})
+
+def main(fileNameA, sheetNameA, fileNameB, sheetNameB, fileNameC, sheetNameC):
+
+    xlsx_TimeTask, xlsx_Score, xlsx_Rate = read_file(fileNameA, sheetNameA, fileNameB, sheetNameB, fileNameC,
+                                                     sheetNameC)
+    mydfProject, mydfPerformers = calculate_marks(xlsx_TimeTask, xlsx_Score, xlsx_Rate)
+
+    print("Общие трудозатраты на проект: " + str(xlsx_TimeTask["Часы"].sum()) + " часов")
+    print("Среднее время, затраченное на решение задач: " + str(
+        round(mydfProject["Время, затраченное на решение каждой задачи"].mean(), 1)) + " часов")
+    print("Медианное время, затраченное на решение задач: " + str(
+        round(mydfProject["Время, затраченное на решение каждой задачи"].median(), 1)) + " часов")
+    performers = mydfPerformers["Исполнитель"]
     for x in performers:
-        print("Среднее количество часов, отрабатываемое за день сотрудником " + x + ": " + str(round(df_hours_on_performers["Время"][df_hours_on_performers["Исполнитель"] == x].sum(), 1)))
+        print("Среднее время, затраченное на решение задач исполнителем " + x + ": " + str(
+            mydfPerformers["Ср.время на задачу"][mydfPerformers["Исполнитель"] == x].sum()) + " часов")
+    print("Рентабельность проекта: " + str(round(mydfProject["Рентабельность"].values[0], 1)))
+    for x in performers:
+        print("Среднее количество часов, отрабатываемое за день сотрудником " + x + ": " + str(
+            round(mydfPerformers["Часов в день"][mydfPerformers["Исполнитель"] == x].sum(), 1)))
 
-    for i, x in enumerate(performers):
-        if len(absence_days[i]) != 0:
-            print(f"Дни отсутствия сотрудника {x}:") #+ str(absence_days[i]))
-            print(*absence_days[i], sep=", ")
+    for x in performers:
+        if len(*mydfPerformers["Список пропущ-х дней"][mydfPerformers["Исполнитель"] == x]) != 0:
+            print(f"Дни отсутствия сотрудника {x}:")
+            print(*mydfPerformers["Список пропущ-х дней"][mydfPerformers["Исполнитель"] == x])
         else:
             print(f"Сотрудник {x} не имеет дней отсутствия")
 
     for x in performers:
-        print("Средний \"вылет\" из оценки специалиста " + x + ": " + str(df_outliers["Вылет"][df_outliers["Исполнитель"] == x].sum()) + " %")
+        print("Средний \"вылет\" из оценки специалиста " + x + ": " + str(
+            mydfPerformers["Ср.вылет из оценки"][mydfPerformers["Исполнитель"] == x].sum()) + " %")
 
-    totalHours_onTask = []
+    totalhours_onTask = []
     for x in xlsx_Score["Задача"]:
-        totalHours_onTask.append(xlsx_TimeTask["Часы"][xlsx_TimeTask["Задача"] == x].sum())
-    xlsx_Score["Факт"] = totalHours_onTask
-    fig, ax = plt.subplots()
-    fig.set_figheight(8)
-    fig.set_figwidth(25)
-    index = np.arange(len(xlsx_Score["Задача"]))
-    bar_width = 0.4
-    opacity = 0.5
-    st_score = plt.bar(index, xlsx_Score["Оценка"], bar_width, alpha=opacity, color='y', label='Оценка')
-    st_fact = plt.bar(index + bar_width, xlsx_Score["Факт"], bar_width, alpha=opacity, color='b', label='Факт')
-    plt.xlabel("Задача LOC-")
-    plt.ylabel("Часы")
-    plt.title("Оценки трудозатрат и их фактические значения")
-    plt.legend()
-    plt.xticks(index + bar_width / 2, index + 1)
-    fig.savefig("Score_fact.png")
+        totalhours_onTask.append(xlsx_TimeTask["Часы"][xlsx_TimeTask["Задача"] == x].sum())
+    xlsx_Score["Факт"] = totalhours_onTask
+
+    getbar(xlsx_Score["Оценка"], xlsx_Score["Факт"], "Оценка", "Факт", "Задача LOC-", "Часы",
+           "Оценки трудозатрат и их фактические значения", "Score_fact.png")
 
 
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    main(fileA, sheetA, fileB, sheetB, fileC, sheetC)
